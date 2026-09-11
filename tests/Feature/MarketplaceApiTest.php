@@ -70,18 +70,18 @@ class MarketplaceApiTest extends TestCase
         $this->getJson('/api/advertisements?type=invalid')->assertUnprocessable();
     }
 
-    public function test_public_advertisements_only_return_approved_active_bank_listings(): void
+    public function test_public_advertisements_only_return_published_active_bank_listings(): void
     {
         $user = User::factory()->create(['is_verified' => true]);
         $activeBank = Bank::factory()->create(['is_active' => true]);
         $inactiveBank = Bank::factory()->create(['is_active' => false]);
-        $approved = Advertisement::factory()->create(['user_id' => $user->id, 'bank_id' => $activeBank->id, 'status' => 'approved']);
+        $published = Advertisement::factory()->create(['user_id' => $user->id, 'bank_id' => $activeBank->id, 'status' => 'published']);
         Advertisement::factory()->create(['user_id' => $user->id, 'bank_id' => $activeBank->id, 'status' => 'pending']);
-        Advertisement::factory()->create(['user_id' => $user->id, 'bank_id' => $inactiveBank->id, 'status' => 'approved']);
+        Advertisement::factory()->create(['user_id' => $user->id, 'bank_id' => $inactiveBank->id, 'status' => 'published']);
 
         $response = $this->getJson('/api/advertisements');
 
-        $response->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $approved->id);
+        $response->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $published->id);
     }
 
     public function test_public_advertisement_detail_returns_full_approved_listing(): void
@@ -126,6 +126,92 @@ class MarketplaceApiTest extends TestCase
 
         $this->actingAs($user, 'sanctum')->getJson('/api/user/ads')
             ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $ownAd->id);
+    }
+
+    public function test_public_advertisements_are_paginated_by_ten_with_metadata(): void
+    {
+        $bank = Bank::factory()->create(['is_active' => true]);
+        $user = User::factory()->create();
+        Advertisement::factory()->count(11)->create(['user_id' => $user->id, 'bank_id' => $bank->id]);
+
+        $response = $this->getJson('/api/advertisements');
+
+        $response->assertOk()
+            ->assertJsonCount(10, 'data')
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.last_page', 2)
+            ->assertJsonPath('meta.total', 11)
+            ->assertJsonPath('meta.per_page', 10);
+    }
+
+    public function test_user_advertisements_are_paginated_and_filter_by_status(): void
+    {
+        $user = User::factory()->create(['is_verified' => true]);
+        $user->assignRole('seller');
+        $bank = Bank::factory()->create(['is_active' => true]);
+        Advertisement::factory()->count(11)->create([
+            'user_id' => $user->id,
+            'bank_id' => $bank->id,
+            'status' => Advertisement::STATUS_PENDING_APPROVAL,
+        ]);
+        Advertisement::factory()->create([
+            'user_id' => $user->id,
+            'bank_id' => $bank->id,
+            'status' => Advertisement::STATUS_REJECTED,
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')
+            ->getJson('/api/user/advertisements?status=pending_approval');
+
+        $response->assertOk()
+            ->assertJsonCount(10, 'data')
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.last_page', 2)
+            ->assertJsonPath('meta.total', 11)
+            ->assertJsonPath('meta.per_page', 10)
+            ->assertJsonMissing(['status' => Advertisement::STATUS_REJECTED]);
+
+        $this->actingAs($user, 'sanctum')
+            ->getJson('/api/user/advertisements?status=pending_approval&page=2')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('meta.current_page', 2);
+    }
+
+    public function test_user_advertisements_support_advanced_filters(): void
+    {
+        $user = User::factory()->create(['is_verified' => true]);
+        $user->assignRole('seller');
+        $bank = Bank::factory()->create(['is_active' => true]);
+        $province = Location::factory()->create(['parent_id' => null]);
+        $city = Location::factory()->create(['parent_id' => $province->id]);
+        $matching = Advertisement::factory()->create([
+            'user_id' => $user->id,
+            'bank_id' => $bank->id,
+            'location_id' => $city->id,
+            'type' => 'supply',
+            'title' => 'واگذاری ویژه فیلتر تست',
+            'loan_amount' => 500,
+            'assignment_price' => 40,
+            'status' => Advertisement::STATUS_PUBLISHED,
+        ]);
+        Advertisement::factory()->create([
+            'user_id' => $user->id,
+            'bank_id' => $bank->id,
+            'type' => 'demand',
+            'title' => 'تقاضای خارج از فیلتر',
+            'loan_amount' => 900,
+            'assignment_price' => 80,
+            'status' => Advertisement::STATUS_PUBLISHED,
+        ]);
+
+        $this->actingAs($user, 'sanctum')
+            ->getJson('/api/user/advertisements?search=ویژه&type=supply&bank_id='.$bank->id.'&min_amount=400&max_amount=600&min_price=30&max_price=50&province_id='.$province->id.'&location_id='.$city->id)
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.per_page', 10);
     }
 
     public function test_advertisement_belongs_to_a_bank(): void
@@ -198,6 +284,25 @@ class MarketplaceApiTest extends TestCase
         $this->getJson('/api/banks/'.$bank->id.'/plans')
             ->assertOk()
             ->assertJsonPath('data.0.id', $plan->id);
+    }
+
+    public function test_banks_include_published_advertisement_counts_and_total_metadata(): void
+    {
+        $activeBank = Bank::factory()->create(['is_active' => true]);
+        $otherActiveBank = Bank::factory()->create(['is_active' => true]);
+        $inactiveBank = Bank::factory()->create(['is_active' => false]);
+        Advertisement::factory()->count(2)->create(['bank_id' => $activeBank->id, 'status' => Advertisement::STATUS_PUBLISHED]);
+        Advertisement::factory()->create(['bank_id' => $activeBank->id, 'status' => Advertisement::STATUS_PENDING_APPROVAL]);
+        Advertisement::factory()->create(['bank_id' => $otherActiveBank->id, 'status' => Advertisement::STATUS_PUBLISHED]);
+        Advertisement::factory()->create(['bank_id' => $inactiveBank->id, 'status' => Advertisement::STATUS_PUBLISHED]);
+
+        $response = $this->getJson('/api/banks')->assertOk();
+        $counts = collect($response->json('data'))->keyBy('id');
+
+        $response->assertJsonPath('meta.published_advertisements_count', 3);
+        $this->assertSame(2, $counts[$activeBank->id]['advertisements_count']);
+        $this->assertSame(1, $counts[$otherActiveBank->id]['advertisements_count']);
+        $this->assertFalse($counts->has($inactiveBank->id));
     }
 
     public function test_public_advertisements_support_standard_sorting_options(): void

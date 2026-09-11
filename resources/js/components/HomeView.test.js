@@ -214,4 +214,22 @@ describe('HomeView', () => {
         expect(window.location.search).toBe('?sort=amount_desc');
         expect(getAllAds).toHaveBeenCalledWith(expect.objectContaining({ sort: 'amount_desc' }));
     });
+
+    it('loads the selected public page and syncs page query', async () => {
+        getAllAds.mockImplementation((params = {}) => ({
+            data: params.page === 2 ? [ads[5]] : ads.slice(0, 10),
+            meta: { total: 11, current_page: params.page || 1, last_page: 2, per_page: 10 },
+        }));
+        const wrapper = mountHome();
+        await flushPromises();
+
+        const pageTwo = wrapper.findAll('.p-paginator-page').find((button) => button.text() === '2');
+        expect(pageTwo).toBeTruthy();
+        await pageTwo.trigger('click');
+        await flushPromises();
+
+        expect(window.location.search).toBe('?page=2');
+        expect(getAllAds).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, per_page: 10 }));
+        expect(wrapper.findAll('.ad-card')).toHaveLength(1);
+    });
 });

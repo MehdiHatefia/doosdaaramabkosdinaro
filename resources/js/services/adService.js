@@ -25,8 +25,9 @@ export const adService = {
     getContact(id) {
         return request('getContact', 'post', `/advertisements/${id}/contact`);
     },
-    getMyAds(status = '') {
-        return request('getMyAds', 'get', '/user/ads', { params: status ? { status } : {} });
+    getMyAds(filters = {}, page = 1, perPage = 10) {
+        const normalizedFilters = typeof filters === 'string' ? { status: filters } : filters;
+        return request('getMyAds', 'get', '/user/advertisements', { params: { ...normalizedFilters, page, per_page: perPage } });
     },
     create(payload) {
         return request('create', 'post', '/advertisements', { data: payload });

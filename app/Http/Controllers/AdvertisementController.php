@@ -31,14 +31,16 @@ class AdvertisementController extends Controller
             'max_price' => ['nullable', 'numeric', 'gte:min_price'],
             'search' => ['nullable', 'string', 'max:120'],
             'sort' => ['nullable', 'string', 'max:30'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
         ]);
 
         $minAmount = $filters['min_amount'] ?? $filters['loan_amount_min'] ?? null;
         $maxAmount = $filters['max_amount'] ?? $filters['loan_amount_max'] ?? null;
+        $perPage = (int) ($filters['per_page'] ?? 10);
 
         $query = Advertisement::query()
             ->with(['bank', 'bankPlan', 'location.parent', 'user'])
-            ->whereIn('status', [Advertisement::STATUS_PUBLISHED, 'approved'])
+            ->where('status', Advertisement::STATUS_PUBLISHED)
             ->whereHas('bank', fn ($bankQuery) => $bankQuery->where('is_active', true));
 
         $query->when($filters['type'] ?? null, fn ($query, $type) => $query->where('type', $type));
@@ -59,7 +61,7 @@ class AdvertisementController extends Controller
             });
         });
 
-        $advertisements = $query->applySorting($filters['sort'] ?? null)->paginate(12)->withQueryString();
+        $advertisements = $query->applySorting($filters['sort'] ?? null)->paginate($perPage)->withQueryString();
 
         Log::info('Public advertisements listed', [
             'function' => __METHOD__,
@@ -108,17 +110,49 @@ class AdvertisementController extends Controller
     public function userAds(Request $request)
     {
         $user = $request->user('sanctum');
-        $filters = $request->validate(['status' => ['nullable', 'in:pending_approval,published,rejected,expired,handed_over,pending,approved,closed']]);
-        $advertisements = Advertisement::with(['bank', 'bankPlan', 'location.parent', 'user'])
-            ->where('user_id', $user->id)
-            ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status === 'pending' ? Advertisement::STATUS_PENDING_APPROVAL : ($status === 'approved' ? Advertisement::STATUS_PUBLISHED : ($status === 'closed' ? Advertisement::STATUS_HANDED_OVER : $status))))
+        $filters = $request->validate([
+            'status' => ['nullable', 'in:pending_approval,published,rejected,expired,handed_over,pending,approved,closed'],
+            'search' => ['nullable', 'string', 'max:120'],
+            'type' => ['nullable', 'in:supply,demand'],
+            'bank_id' => ['nullable', 'integer', 'exists:banks,id'],
+            'min_amount' => ['nullable', 'numeric', 'min:0'],
+            'max_amount' => ['nullable', 'numeric', 'gte:min_amount'],
+            'min_price' => ['nullable', 'numeric', 'min:0'],
+            'max_price' => ['nullable', 'numeric', 'gte:min_price'],
+            'province_id' => ['nullable', 'integer', 'exists:locations,id'],
+            'location_id' => ['nullable', 'integer', 'exists:locations,id'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
+        ]);
+        $status = match ($filters['status'] ?? null) {
+            'pending' => Advertisement::STATUS_PENDING_APPROVAL,
+            'approved' => Advertisement::STATUS_PUBLISHED,
+            'closed' => Advertisement::STATUS_HANDED_OVER,
+            default => $filters['status'] ?? null,
+        };
+        $advertisements = $user->advertisements()
+            ->with(['bank', 'bankPlan', 'location.parent', 'user'])
+            ->when($status, fn ($query) => $query->where('status', $status))
+            ->when($filters['search'] ?? null, function ($query, $search) {
+                $query->where(function ($searchQuery) use ($search) {
+                    $searchQuery->where('title', 'like', "%{$search}%")
+                        ->orWhere('id', is_numeric($search) ? '=' : 'like', is_numeric($search) ? $search : "%{$search}%");
+                });
+            })
+            ->when($filters['type'] ?? null, fn ($query, $type) => $query->where('type', $type))
+            ->when($filters['bank_id'] ?? null, fn ($query, $bankId) => $query->where('bank_id', $bankId))
+            ->when($filters['min_amount'] ?? null, fn ($query, $amount) => $query->where('loan_amount', '>=', $amount))
+            ->when($filters['max_amount'] ?? null, fn ($query, $amount) => $query->where('loan_amount', '<=', $amount))
+            ->when($filters['min_price'] ?? null, fn ($query, $price) => $query->where('assignment_price', '>=', $price))
+            ->when($filters['max_price'] ?? null, fn ($query, $price) => $query->where('assignment_price', '<=', $price))
+            ->when($filters['province_id'] ?? null, fn ($query, $provinceId) => $query->whereHas('location', fn ($locationQuery) => $locationQuery->where('parent_id', $provinceId)))
+            ->when($filters['location_id'] ?? null, fn ($query, $locationId) => $query->where('location_id', $locationId))
             ->latest()
-            ->get();
+            ->paginate((int) ($filters['per_page'] ?? 10))->withQueryString();
 
         Log::info('User advertisements listed', [
             'function' => __METHOD__,
             'user_id' => $user->id,
-            'payload' => [],
+            'payload' => $filters,
             'trace' => $request->header('X-Request-Id'),
             'result_count' => $advertisements->count(),
         ]);

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import Dialog from 'primevue/dialog';
+import Paginator from 'primevue/paginator';
 import Skeleton from 'primevue/skeleton';
 import AdCard from './AdCard.vue';
 import AuthModal from './AuthModal.vue';
@@ -37,9 +38,13 @@ const priceMax = ref(100);
 const validSorts = new Set(['latest', 'amount_desc', 'amount_asc', 'price_asc', 'price_desc', 'rate_asc']);
 const requestedSort = new URLSearchParams(window.location.search).get('sort');
 const sort = ref(validSorts.has(requestedSort) ? requestedSort : 'latest');
+const currentPage = ref(Math.max(1, Number(new URLSearchParams(window.location.search).get('page')) || 1));
+const totalRecords = ref(0);
+const rowsPerPage = 10;
 const selectedAd = ref(null);
 const ads = ref([]);
 const banks = ref([]);
+const publishedAdvertisementsCount = ref(0);
 const plans = ref([]);
 const provinces = ref([]);
 const isLoading = ref(false);
@@ -88,8 +93,9 @@ async function loadAds() {
     serverError.value = '';
 
     try {
-        const response = await adService.getAll(filters.value);
-        ads.value = response.data || [];
+        const response = await adService.getAll({ ...filters.value, page: currentPage.value, per_page: rowsPerPage });
+        ads.value = response.data || response;
+        totalRecords.value = response.meta?.total || ads.value.length;
         logger.info('onMounted', 'Advertisements received', { count: ads.value.length });
         if (!ads.value.length) logger.warn('onMounted', 'No advertisements received');
         syncAdFromHash();
@@ -106,6 +112,7 @@ async function loadBanks() {
     try {
         const response = await bankService.getAll();
         banks.value = response.data || [];
+        publishedAdvertisementsCount.value = response.meta?.published_advertisements_count || 0;
         logger.info('onMounted', 'Banks received', { count: banks.value.length });
         if (!banks.value.length) logger.warn('onMounted', 'No banks received');
     } catch (exception) {
@@ -154,7 +161,11 @@ const filteredAds = computed(() => ads.value);
 const relatedAds = computed(() => selectedAd.value ? ads.value.filter((ad) => ad.id !== selectedAd.value.id && (ad.bank === selectedAd.value.bank || ad.type === selectedAd.value.type)).slice(0, 3) : []);
 const selectedDescription = computed(() => selectedAd.value?.description || '');
 
-watch(filters, loadAds, { deep: true });
+watch(filters, () => {
+    currentPage.value = 1;
+    syncPageQuery(1);
+    loadAds();
+}, { deep: true });
 watch(selectedBank, () => {
     selectedPlan.value = '';
     loadPlans();
@@ -175,6 +186,8 @@ function resetFilters() {
     priceMin.value = 0;
     priceMax.value = 100;
     sort.value = 'latest';
+    currentPage.value = 1;
+    syncPageQuery(1);
 }
 
 function openCityModal() {
@@ -241,6 +254,20 @@ function cancelCitySelection() {
 
 function changeSort(nextSort) {
     sort.value = nextSort;
+}
+
+function syncPageQuery(page) {
+    const params = new URLSearchParams(window.location.search);
+    if (page > 1) params.set('page', page); else params.delete('page');
+    const queryString = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${queryString ? `?${queryString}` : ''}${window.location.hash}`);
+}
+
+async function onPageChange(event) {
+    currentPage.value = event.page + 1;
+    syncPageQuery(currentPage.value);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    await loadAds();
 }
 
 function openAd(ad) {
@@ -371,17 +398,17 @@ onUnmounted(() => window.removeEventListener('auth:unverified', handleUnverified
         </div>
 
         <main v-if="!selectedAd" id="listings" class="main-content">
-            <div class="page-heading"><div><span class="breadcrumb">خانه / آگهی‌های وام</span><h1>آگهی‌های امتیاز وام</h1><p>{{ filteredAds.length }} آگهی در مستروام</p></div><SortControls v-model="sort" @change-sort="changeSort" /></div>
+            <div class="page-heading"><div><span class="breadcrumb">خانه / آگهی‌های وام</span><h1>آگهی‌های امتیاز وام</h1><p>{{ totalRecords }} آگهی در مستروام</p></div><SortControls v-model="sort" @change-sort="changeSort" /></div>
             <div class="listing-layout">
                 <aside class="filters-panel" aria-label="فیلتر آگهی‌ها">
                     <div class="filter-title"><h2><i class="pi pi-filter"></i>فیلتر آگهی‌ها</h2><button type="button" @click="resetFilters">حذف همه</button></div>
                     <div class="filter-block"><label for="province"><i class="pi pi-map-marker"></i>استان</label><select id="province" v-model="selectedProvince"><option value="">همه استان‌ها</option><option v-for="province in provinces" :key="province.id" :value="province.id">{{ province.name }}</option></select><label for="city">شهر</label><select id="city" v-model="selectedCity" :disabled="!selectedProvince"><option value="">همه شهرها</option><option v-for="city in selectedProvinceCities" :key="city.id" :value="city.id">{{ city.name }}</option></select></div>
-                    <div class="filter-block"><label><i class="pi pi-building"></i>دسته‌بندی بانک</label><button type="button" class="bank-option" :class="{ active: !selectedBank }" @click="selectedBank = ''">همه بانک‌ها<i :class="!selectedBank ? 'pi pi-check-circle' : 'pi pi-angle-left'"></i></button><button v-for="bank in banks" :key="bank.id" type="button" class="bank-option" :class="{ active: selectedBank === bank.id }" @click="selectedBank = bank.id">{{ bank.name }}<i :class="selectedBank === bank.id ? 'pi pi-check-circle' : 'pi pi-angle-left'"></i></button><select v-if="selectedBank" v-model="selectedPlan"><option value="">همه طرح‌ها</option><option v-for="plan in plans" :key="plan.id" :value="plan.id">{{ plan.title }}</option></select></div>
+                    <div class="filter-block"><label><i class="pi pi-building"></i>دسته‌بندی بانک</label><button type="button" class="bank-option" :class="{ active: !selectedBank }" @click="selectedBank = ''"><span>همه بانک‌ها</span><span class="bank-option-count">{{ publishedAdvertisementsCount }}</span><i :class="!selectedBank ? 'pi pi-check-circle' : 'pi pi-angle-left'"></i></button><button v-for="bank in banks" :key="bank.id" type="button" class="bank-option" :class="{ active: selectedBank === bank.id }" @click="selectedBank = bank.id"><span>{{ bank.name }}</span><span class="bank-option-count">{{ bank.advertisements_count || 0 }}</span><i :class="selectedBank === bank.id ? 'pi pi-check-circle' : 'pi pi-angle-left'"></i></button><select v-if="selectedBank" v-model="selectedPlan"><option value="">همه طرح‌ها</option><option v-for="plan in plans" :key="plan.id" :value="plan.id">{{ plan.title }}</option></select></div>
                     <div class="filter-block"><span class="filter-label">نوع آگهی</span><label class="check-row"><input v-model="activeType" type="radio" value="all" name="type" />همه آگهی‌ها</label><label class="check-row"><input v-model="activeType" type="radio" value="supply" name="type" />فروش امتیاز وام (عرضه)</label><label class="check-row"><input v-model="activeType" type="radio" value="demand" name="type" />خریدار وام (تقاضا)</label></div>
                     <div class="filter-block"><span class="filter-label">مبلغ وام <small>میلیون تومان</small></span><div class="compact-fields"><input v-model.number="amountMin" type="number" min="0" max="1000" aria-label="حداقل مبلغ وام" /><span>تا</span><input v-model.number="amountMax" type="number" min="0" max="1000" aria-label="حداکثر مبلغ وام" /></div></div>
                     <div class="filter-block"><span class="filter-label">قیمت واگذاری <small>میلیون تومان</small></span><div class="compact-fields"><input v-model.number="priceMin" type="number" min="0" max="100" aria-label="حداقل قیمت واگذاری" /><span>تا</span><input v-model.number="priceMax" type="number" min="0" max="100" aria-label="حداکثر قیمت واگذاری" /></div></div>
                 </aside>
-                <section class="results-area"><div v-if="isLoading" class="ads-grid" role="status"><Skeleton v-for="index in 6" :key="index" height="248px" /></div><div v-else-if="serverError" class="empty-state" role="alert"><i class="pi pi-exclamation-triangle"></i><p>{{ serverError }}</p></div><template v-else><div class="results-toolbar"><span><i class="pi pi-list"></i>نتیجه جستجو</span><span>{{ filteredAds.length }} مورد</span></div><div class="ads-grid"><AdCard v-for="ad in filteredAds" :key="ad.id" :ad="ad" @view="openAd" /><div v-if="!filteredAds.length" class="empty-state"><i class="pi pi-search"></i><h3>آگهی‌ای پیدا نشد</h3><p>فیلترها یا عبارت جستجو را تغییر بده.</p></div></div></template></section>
+                <section class="results-area"><div v-if="isLoading" class="ads-grid" role="status"><Skeleton v-for="index in 6" :key="index" height="248px" /></div><div v-else-if="serverError" class="empty-state" role="alert"><i class="pi pi-exclamation-triangle"></i><p>{{ serverError }}</p></div><template v-else><div class="results-toolbar"><span><i class="pi pi-list"></i>نتیجه جستجو</span><span>{{ filteredAds.length }} مورد</span></div><div class="ads-grid"><AdCard v-for="ad in filteredAds" :key="ad.id" :ad="ad" @view="openAd" /><div v-if="!filteredAds.length" class="empty-state"><i class="pi pi-search"></i><h3>آگهی‌ای پیدا نشد</h3><p>فیلترها یا عبارت جستجو را تغییر بده.</p></div></div><Paginator v-if="totalRecords > rowsPerPage" class="ads-paginator" :rows="rowsPerPage" :totalRecords="totalRecords" :first="(currentPage - 1) * rowsPerPage" @page="onPageChange"><template #firstpagelinkicon><i class="pi pi-angle-double-right"></i></template><template #prevpagelinkicon><i class="pi pi-chevron-right"></i></template><template #nextpagelinkicon><i class="pi pi-chevron-left"></i></template><template #lastpagelinkicon><i class="pi pi-angle-double-left"></i></template></Paginator></template></section>
             </div>
         </main>
         <main v-else class="detail-page main-content">
@@ -416,12 +443,13 @@ onUnmounted(() => window.removeEventListener('auth:unverified', handleUnverified
 .main-content { padding-top: 34px; padding-bottom: 60px; }.page-heading { display: flex; justify-content: space-between; align-items: end; padding-bottom: 24px; border-bottom: 1px solid #eee; }.breadcrumb { color: var(--muted); font-size: 11px; }.page-heading h1 { margin: 9px 0 4px; font-size: 25px; font-weight: 700; }.page-heading p, .results-toolbar { margin: 0; color: var(--muted); font-size: 12px; }.sort-button { border: 1px solid #ddd; border-radius: 6px; background: #fff; color: var(--muted); padding: 10px 13px; font-size: 11px; cursor: pointer; }
 .listing-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 32px; padding-top: 28px; direction: ltr; }.filters-panel, .results-area { direction: rtl; grid-row: 1; }.filters-panel { grid-column: 2; height: max-content; padding: 22px 24px 24px 18px; border-right: 1px solid #eee; }.filter-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 26px; }.filter-title h2 { margin: 0; font-size: 16px; }.filter-title button { border: 0; background: transparent; color: #a62626; cursor: pointer; font-size: 11px; }.filter-block { padding: 0 0 22px; margin-bottom: 22px; border-bottom: 1px solid #f0f0f0; }.filter-block > label, .filter-label { display: block; margin-bottom: 10px; color: #444; font-size: 12px; font-weight: 600; }.filter-label small { float: left; color: #999; font-size: 10px; font-weight: 400; }.filter-block select, .compact-fields input { height: 38px; width: 100%; border: 1px solid #ddd; border-radius: 6px; background: #fff; color: #444; padding: 0 9px; font-size: 12px; outline: 0; }.filter-block select:focus, .compact-fields input:focus { border-color: #a62626; }.bank-option { display: flex; justify-content: space-between; width: 100%; padding: 9px 0; border: 0; background: transparent; color: #666; cursor: pointer; font-size: 12px; text-align: right; }.bank-option:hover, .bank-option.active { color: #a62626; }.bank-option .pi { order: 0; }.check-row { display: flex; align-items: center; gap: 8px; margin: 11px 0; color: #666; font-size: 11px; font-weight: 400 !important; cursor: pointer; }.check-row input { accent-color: #a62626; }.compact-fields { display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr); align-items: center; gap: 7px; }.compact-fields input { min-width: 0; text-align: center; }.compact-fields span { color: #999; font-size: 11px; text-align: center; }
 .results-area { grid-column: 1; min-width: 0; }.results-toolbar { display: flex; justify-content: space-between; padding-bottom: 14px; }.ads-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }.empty-state { grid-column: 1 / -1; padding: 60px 20px; color: #999; text-align: center; }.empty-state h3 { color: #555; font-size: 15px; }.empty-state p { font-size: 12px; }.site-footer { display: flex; align-items: center; gap: 10px; min-height: 78px; border-top: 1px solid #eee; color: #555; font-size: 13px; }.site-footer .brand-mark { width: 30px; height: 30px; font-size: 15px; }.site-footer small { margin-right: 10px; color: #999; font-size: 11px; }
-.site-header { border-top: 3px solid #ef8354; box-shadow: 0 3px 16px rgba(32, 42, 53, .08); }.brand-mark { background: linear-gradient(145deg, #c74646, #a62626); box-shadow: 0 5px 12px rgba(166, 38, 38, .22); }.page-heading h1 { color: #202a35; letter-spacing: -.2px; }.page-heading p { color: #71808c; }.sort-button:hover { border-color: #b83232; color: #b83232; }.filters-panel { background: #fff; border-radius: 10px; box-shadow: 0 5px 20px rgba(32, 42, 53, .05); }.filter-title { padding-bottom: 14px; border-bottom: 2px solid #ef8354; }.filter-block:last-child { border-bottom: 0; }.bank-option.active { font-weight: 700; }.results-toolbar span:last-child { color: #b83232; font-weight: 700; }.ad-card { border-top: 3px solid #a62626; }.ad-card h2 { color: #202a35; }.ad-details dd { color: #334455; font-weight: 600; }.ad-card footer { color: #71808c; }
+.site-header { border-top: 3px solid #ef8354; box-shadow: 0 3px 16px rgba(32, 42, 53, .08); }.brand-mark { background: linear-gradient(145deg, #c74646, #a62626); box-shadow: 0 5px 12px rgba(166, 38, 38, .22); }.page-heading h1 { color: #202a35; letter-spacing: -.2px; }.page-heading p { color: #71808c; }.sort-button:hover { border-color: #b83232; color: #b83232; }.filters-panel { background: #fff; border-radius: 10px; box-shadow: 0 5px 20px rgba(32, 42, 53, .05); }.filter-title { padding-bottom: 14px; border-bottom: 2px solid #ef8354; }.filter-block:last-child { border-bottom: 0; }.bank-option.active { font-weight: 700; }.results-toolbar span:last-child { color: #b83232; font-weight: 700; }
 @media (max-width: 1000px) { .header-main { gap: 12px; }.header-link span { display: none; }.ads-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .header-inner, .main-content, .site-footer { padding-left: 16px; padding-right: 16px; }.header-main { min-height: 64px; flex-wrap: wrap; padding: 10px 0; }.header-search { order: 5; flex-basis: 100%; max-width: none; }.location-button { margin-right: auto; border: 0; padding: 8px 4px; }.header-actions { gap: 0; }.header-link { padding: 8px; }.post-button { padding: 10px; font-size: 0; }.post-button .pi { font-size: 14px; }.main-content { padding-top: 24px; }.page-heading { align-items: flex-start; }.page-heading h1 { font-size: 21px; }.sort-button { margin-top: 18px; font-size: 0; }.sort-button .pi { font-size: 14px; }.listing-layout { display: block; }.filters-panel { margin-bottom: 28px; padding: 22px 16px; border-right: 0; border-top: 1px solid #eee; }.ads-grid { grid-template-columns: 1fr; }.site-footer { min-height: 64px; } }
 .header-search input, .page-heading, .results-toolbar, .filters-panel, .results-area, .site-footer { text-align: right; }
 .compact-fields input { text-align: right; }
 .filter-title h2 { display: flex; align-items: center; gap: 7px; }.filter-title h2 .pi, .filter-block > label .pi, .results-toolbar .pi { color: #a62626; font-size: 13px; }.results-toolbar span { display: inline-flex; align-items: center; gap: 7px; }
+.bank-option { align-items: center; gap: 8px; }.bank-option > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.bank-option-count { margin-right: auto; padding: 2px 8px; border-radius: 999px; background: #f1f3f4; color: #69757d; font-size: 10px; font-weight: 500; line-height: 1.5; }.bank-option:hover .bank-option-count,.bank-option.active .bank-option-count { background: #fff0ed; color: #a62626; }
 .detail-page { min-height: calc(100vh - 74px); }.back-button { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 24px; border: 0; background: transparent; color: #a62626; cursor: pointer; font-size: 12px; }.detail-layout { display: grid; grid-template-columns: minmax(0, 680px) 260px; gap: 24px; justify-content: center; direction: ltr; }.detail-card, .detail-side { direction: rtl; }.detail-card { padding: 28px; border: 1px solid #e5e9ee; border-radius: 12px; background: #fff; box-shadow: 0 4px 16px rgba(32, 42, 53, .07); }.detail-card__top { display: flex; align-items: center; justify-content: space-between; }.detail-card h1 { margin: 22px 0 8px; color: #202a35; font-size: 25px; }.detail-subtitle { margin: 0; color: #71808c; font-size: 12px; }.detail-meta { display: flex; gap: 22px; margin-top: 22px; padding: 14px 0; border-top: 1px solid #edf0f2; border-bottom: 1px solid #edf0f2; color: #71808c; font-size: 11px; }.detail-meta span { display: inline-flex; align-items: center; gap: 6px; }.detail-meta .pi { color: #a62626; }.detail-values { margin: 16px 0 22px; }.detail-values div { display: flex; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid #f0f2f4; }.detail-values dt { color: #71808c; font-size: 12px; }.detail-values dd { margin: 0; color: #202a35; font-size: 13px; font-weight: 700; }.detail-cta { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 13px; border: 0; border-radius: 7px; background: #a62626; color: #fff; cursor: pointer; font-size: 13px; font-weight: 600; }.detail-cta:hover { background: #861f1f; }.detail-side { align-self: start; padding: 22px; border: 1px solid #f1ddd8; border-radius: 10px; background: #fff8f6; color: #71808c; }.detail-side .pi { color: #a62626; font-size: 22px; }.detail-side h2 { margin: 12px 0 7px; color: #202a35; font-size: 14px; }.detail-side p { margin: 0; font-size: 11px; line-height: 2; }
 @media (max-width: 700px) { .detail-layout { display: block; }.detail-card { padding: 20px 16px; }.detail-card h1 { font-size: 21px; }.detail-side { margin-top: 16px; }.detail-meta { gap: 12px; } }
 .detail-layout { grid-template-columns: 300px minmax(0, 680px); direction: rtl; align-items: start; }.detail-card { grid-column: 2; display: grid; grid-template-columns: minmax(210px, .9fr) minmax(0, 1.1fr); gap: 0 28px; direction: ltr; overflow: hidden; }.detail-card > *:not(.detail-media) { direction: rtl; }.detail-media { grid-column: 1; grid-row: 1 / span 6; height: 100%; min-height: 420px; margin: -28px 0 -28px -28px; border-bottom: 0; border-left: 1px solid #e5e9ee; }.detail-card__top, .detail-card > h1, .detail-card > .detail-subtitle, .detail-card > .detail-meta, .detail-card > .detail-description, .detail-card > .detail-values, .detail-card > .detail-cta { grid-column: 2; }.detail-side { grid-column: 1; grid-row: 1; width: 100%; }.related-section { grid-column: 1 / -1; }.related-heading { border-bottom: 1px solid #edf0f2; padding-bottom: 12px; }
@@ -436,4 +464,16 @@ onUnmounted(() => window.removeEventListener('auth:unverified', handleUnverified
 .site-footer { display: block; max-width: none; margin-top: 56px; padding: 0 24px; border-top: 1px solid #e7e7e7; background: #fff; color: #555; }.footer-inner, .footer-bottom { max-width: 1280px; margin: 0 auto; }.footer-inner { display: grid; grid-template-columns: 2fr 1fr 1fr 1.5fr; gap: 48px; padding: 42px 0 34px; }.footer-brand .brand { width: max-content; color: #333; }.footer-brand .brand-mark { background: #a62626; box-shadow: none; }.footer-brand p { max-width: 255px; margin: 16px 0 0; color: #777; font-size: 11px; line-height: 2; }.footer-column h2 { margin: 4px 0 16px; color: #333; font-size: 13px; }.footer-column a { display: block; width: max-content; margin: 10px 0; color: #666; font-size: 11px; text-decoration: none; }.footer-column a:hover { color: #a62626; }.footer-trust { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid #e8e8e8; border-radius: 8px; background: #fafafa; }.footer-trust > span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 6px; background: #fff1ee; color: #a62626; }.footer-trust strong, .footer-trust small { display: block; }.footer-trust strong { color: #333; font-size: 12px; }.footer-trust small { margin-top: 6px; color: #777; font-size: 10px; line-height: 1.8; }.footer-bottom { display: flex; justify-content: space-between; padding: 16px 0; border-top: 1px solid #e7e7e7; color: #888; font-size: 10px; }
 @media (max-width: 700px) { .site-footer { padding: 0 16px; }.footer-inner { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 20px; padding: 32px 0 26px; }.footer-brand, .footer-trust { grid-column: 1 / -1; }.footer-trust { max-width: 320px; }.footer-bottom { display: block; line-height: 2; }.footer-bottom span { display: block; }.footer-bottom span + span { margin-top: 3px; } }
 .filter-title { border-bottom-color: #a62626; }
+.ads-paginator { justify-content: center; margin-top: 24px; direction: rtl; }
+.ads-paginator :deep(.p-paginator-page.p-highlight) { background: #a62626; border-color: #a62626; color: #fff; }
+.ads-paginator :deep(.p-paginator-page), .ads-paginator :deep(.p-paginator-prev), .ads-paginator :deep(.p-paginator-next) { min-width: 34px; height: 34px; color: #59666f; }
+.ads-grid { grid-template-columns: repeat(1, minmax(0, 1fr)); gap: 20px; }
+.ads-paginator { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 32px 0; direction: rtl; }
+.ads-paginator :deep(.p-paginator-page), .ads-paginator :deep(.p-paginator-prev), .ads-paginator :deep(.p-paginator-next), .ads-paginator :deep(.p-paginator-first), .ads-paginator :deep(.p-paginator-last) { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; height: 40px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; color: #374151; font-size: 14px; font-weight: 700; transition: background .2s ease, box-shadow .2s ease, color .2s ease; }
+.ads-paginator :deep(.p-paginator-page.p-highlight) { background: #a62626; border-color: #a62626; box-shadow: 0 4px 10px rgba(127, 29, 29, .1); color: #fff; }
+.ads-paginator :deep(.p-paginator-page:not(.p-highlight):hover), .ads-paginator :deep(.p-paginator-prev:not(.p-disabled):hover), .ads-paginator :deep(.p-paginator-next:not(.p-disabled):hover), .ads-paginator :deep(.p-paginator-first:not(.p-disabled):hover), .ads-paginator :deep(.p-paginator-last:not(.p-disabled):hover) { background: #f9fafb; }
+.ads-paginator :deep(.p-disabled) { cursor: not-allowed; opacity: .4; }
+@media (min-width: 768px) { .ads-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1280px) { .ads-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+:global(.p-dialog.contact-dialog),:global(.contact-dialog .p-dialog-content),:global(.contact-dialog .p-dialog-header),:global(.contact-dialog .p-dialog-footer){background-color:#fff!important;color:#1f2937!important}:global(.p-dialog.contact-dialog){border-radius:1.25rem!important;border:1px solid #f3f4f6!important;box-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 10px 10px -5px rgba(0,0,0,.04)!important;overflow:hidden!important}:global(.contact-dialog .p-dialog-header){border-bottom:1px solid #f3f4f6!important}:global(.contact-dialog .p-dialog-content){padding:0 1.5rem 1.5rem!important}:global(.contact-dialog .p-dialog-footer){border-top:1px solid #f3f4f6!important}
 </style>
