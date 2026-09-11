@@ -1,7 +1,8 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AuthModal from '../components/AuthModal.vue';
+import AdCard from '../components/AdCard.vue';
 import { adService } from '../services';
 import { useAuthStore } from '../stores/useAuthStore';
 import { createLogger, logException } from '../utils/logger';
@@ -11,6 +12,7 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const ad = ref(null);
+const relatedAds = ref([]);
 const loading = ref(true);
 const error = ref('');
 const authModalVisible = ref(false);
@@ -18,158 +20,67 @@ const contactVisible = ref(false);
 const contactMobile = ref('');
 const saved = ref(false);
 const feedback = ref('');
-
 const numberFormatter = new Intl.NumberFormat('fa-IR');
+const bankLogoPath = (bank) => {
+    const name = bank?.name || bank || '';
+    if (name.includes('رسالت')) return '/images/banks/resalat.svg';
+    if (name.includes('ملی')) return '/images/banks/melli.svg';
+    if (name.includes('کشاورزی')) return '/images/banks/keshavarzi.svg';
+    if (name.includes('صادرات')) return '/images/banks/saderat.svg';
+    if (name.includes('مهر')) return '/images/banks/mehr-iran.svg';
+    if (name.includes('مسکن')) return '/images/banks/maskan.svg';
+    if (name.includes('تجارت')) return '/images/banks/tejarat.svg';
+    if (name.includes('سپه')) return '/images/banks/sepah.svg';
+    return '';
+};
+const formatNumber = (value) => numberFormatter.format(Number(value || 0));
+const formatMillionMoney = (value) => `${formatNumber(value)} میلیون تومان`;
+const formatCompactMoney = (value) => {
+    const amount = Number(value || 0);
+    return amount >= 1000000 ? `${formatNumber(Math.round(amount / 1000000))} میلیون تومان` : `${formatNumber(amount)} تومان`;
+};
+const typeLabel = computed(() => ad.value?.type === 'supply' ? 'واگذاری امتیاز وام' : 'تقاضای خرید امتیاز');
+const bankLogo = computed(() => bankLogoPath(ad.value?.bank));
 
-function formatMoney(value) {
-    return `${numberFormatter.format(Number(value || 0))} میلیون تومان`;
+async function loadRelatedAds() {
+    if (!ad.value?.bank_id) return;
+    try {
+        const response = await adService.getAll({ bank_id: ad.value.bank_id, per_page: 4 });
+        relatedAds.value = (response.data || []).filter((item) => item.id !== ad.value.id).slice(0, 3);
+    } catch (exception) { logger.warn('loadRelatedAds', 'Related advertisements could not be loaded', logException(exception)); }
 }
-
 async function loadAd() {
-    loading.value = true;
-    error.value = '';
-    logger.info('loadAd', 'Advertisement detail request started', { advertisementId: route.params.id });
+    loading.value = true; error.value = '';
     try {
         const response = await adService.getById(route.params.id);
         ad.value = response.data || response;
         const recent = JSON.parse(localStorage.getItem('recent_ads') || '[]');
-        const next = [ad.value, ...recent.filter((item) => item.id !== ad.value.id)].slice(0, 8);
-        localStorage.setItem('recent_ads', JSON.stringify(next));
-        logger.info('loadAd', 'Advertisement detail received', { advertisementId: ad.value?.id });
-    } catch (exception) {
-        logger.error('loadAd', 'Advertisement detail request failed', { ...logException(exception), advertisementId: route.params.id });
-        error.value = exception.response?.status === 404 ? 'این آگهی پیدا نشد یا دیگر منتشر نیست.' : 'دریافت آگهی با خطا مواجه شد.';
-    } finally {
-        loading.value = false;
-    }
+        localStorage.setItem('recent_ads', JSON.stringify([ad.value, ...recent.filter((item) => item.id !== ad.value.id)].slice(0, 8)));
+        await loadRelatedAds();
+    } catch (exception) { logger.error('loadAd', 'Advertisement detail request failed', logException(exception)); error.value = exception.response?.status === 404 ? 'این آگهی پیدا نشد یا دیگر منتشر نیست.' : 'دریافت آگهی با خطا مواجه شد.'; } finally { loading.value = false; }
 }
-
-async function loadBookmarkState() {
-    if (!authStore.isAuthenticated || !authStore.isVerified) return;
-    try {
-        const response = await adService.getBookmarks();
-        const bookmarks = Array.isArray(response?.data) ? response.data : [];
-        saved.value = bookmarks.some((bookmark) => bookmark.id === Number(route.params.id));
-        logger.info('loadBookmarkState', 'Bookmark state received', { advertisementId: route.params.id, bookmarked: saved.value });
-    } catch (exception) {
-        logger.warn('loadBookmarkState', 'Bookmark state could not be loaded', logException(exception));
-    }
-}
-
-async function shareAd() {
-    const shareData = { title: ad.value?.title, text: ad.value?.title, url: window.location.href };
-    try {
-        if (navigator.share) await navigator.share(shareData);
-        else await navigator.clipboard.writeText(window.location.href);
-        feedback.value = 'لینک آگهی کپی شد.';
-        logger.info('shareAd', 'Advertisement link shared', { advertisementId: ad.value?.id });
-    } catch (exception) {
-        if (exception.name !== 'AbortError') logger.error('shareAd', 'Advertisement sharing failed', logException(exception));
-    }
-}
-
-async function toggleBookmark() {
-    authStore.syncFromStorage();
-    if (!authStore.isAuthenticated) {
-        authModalVisible.value = true;
-        return;
-    }
-    if (!authStore.isVerified) {
-        window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } }));
-        return;
-    }
-
-    try {
-        const response = await adService.toggleBookmark(Number(ad.value.id));
-        saved.value = response?.bookmarked === true;
-        feedback.value = saved.value ? 'آگهی نشان شد.' : 'آگهی از نشان‌ها حذف شد.';
-        logger.info('toggleBookmark', 'Advertisement bookmark changed', { advertisementId: ad.value.id, bookmarked: saved.value });
-    } catch (exception) {
-        feedback.value = 'تغییر وضعیت نشان انجام نشد.';
-        logger.error('toggleBookmark', 'Advertisement bookmark change failed', logException(exception));
-    }
-}
-
-function reportAd() {
-    feedback.value = 'گزارش شما ثبت شد و بررسی می‌شود.';
-    logger.info('reportAd', 'Advertisement report submitted', { advertisementId: ad.value?.id });
-}
-
-async function showContact() {
-    logger.info('showContact', 'Contact action requested', { advertisementId: ad.value?.id, authenticated: authStore.isAuthenticated });
-    authStore.syncFromStorage();
-    if (!authStore.isAuthenticated) {
-        authModalVisible.value = true;
-        return;
-    }
-    if (!authStore.isVerified) {
-        window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } }));
-        return;
-    }
-    try {
-        const response = await adService.getContact(Number(ad.value.id));
-        contactMobile.value = response.mobile || response.data?.mobile || '';
-        contactVisible.value = true;
-    } catch (exception) {
-        logger.error('showContact', 'Contact request failed', logException(exception));
-    }
-}
-
-async function handleAuthenticated() {
-    authStore.syncFromStorage();
-    authModalVisible.value = false;
-    if (authStore.isVerified) await showContact();
-    else window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } }));
-    logger.info('showContact', 'Contact revealed after authentication', { advertisementId: ad.value?.id });
-}
-
-function startMessage() {
-    if (!authStore.isAuthenticated) {
-        authModalVisible.value = true;
-        return;
-    }
-    if (!authStore.isVerified) {
-        window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } }));
-        return;
-    }
-    feedback.value = 'امکان ارسال پیام پس از فعال شدن گفت‌وگو فراهم می‌شود.';
-}
-
-onMounted(async () => {
-    authStore.syncFromStorage();
-    await loadAd();
-    await loadBookmarkState();
-});
+async function loadBookmarkState() { if (!authStore.isAuthenticated || !authStore.isVerified) return; try { const response = await adService.getBookmarks(); saved.value = (response?.data || []).some((item) => item.id === Number(route.params.id)); } catch (exception) { logger.warn('loadBookmarkState', 'Bookmark state could not be loaded', logException(exception)); } }
+async function shareAd() { try { const data = { title: ad.value?.title, text: ad.value?.title, url: window.location.href }; if (navigator.share) await navigator.share(data); else await navigator.clipboard.writeText(window.location.href); feedback.value = 'لینک آگهی کپی شد.'; } catch (exception) { if (exception.name !== 'AbortError') logger.error('shareAd', 'Sharing failed', logException(exception)); } }
+async function toggleBookmark() { authStore.syncFromStorage(); if (!authStore.isAuthenticated) { authModalVisible.value = true; return; } if (!authStore.isVerified) { window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } })); return; } try { const response = await adService.toggleBookmark(Number(ad.value.id)); saved.value = response?.bookmarked === true; feedback.value = saved.value ? 'آگهی نشان شد.' : 'آگهی از نشان‌ها حذف شد.'; } catch (exception) { feedback.value = 'تغییر وضعیت نشان انجام نشد.'; logger.error('toggleBookmark', 'Bookmark change failed', logException(exception)); } }
+async function showContact() { authStore.syncFromStorage(); if (!authStore.isAuthenticated) { authModalVisible.value = true; return; } if (!authStore.isVerified) { window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } })); return; } try { const response = await adService.getContact(Number(ad.value.id)); contactMobile.value = response.mobile || response.data?.mobile || ''; contactVisible.value = true; } catch (exception) { logger.error('showContact', 'Contact request failed', logException(exception)); } }
+function handleAuthenticated() { authStore.syncFromStorage(); authModalVisible.value = false; if (authStore.isVerified) showContact(); else window.dispatchEvent(new CustomEvent('auth:verification-required', { detail: { code: 'KYC_REQUIRED' } })); }
+function startMessage() { if (!authStore.isAuthenticated) { authModalVisible.value = true; return; } feedback.value = 'امکان ارسال پیام پس از فعال شدن گفت‌وگو فراهم می‌شود.'; }
+onMounted(async () => { authStore.syncFromStorage(); await loadAd(); await loadBookmarkState(); });
 </script>
 
 <template>
-    <main class="ad-detail-page" dir="rtl">
-        <div class="ad-detail-shell">
-            <button class="back-link" type="button" @click="router.push({ name: 'home' })"><i class="pi pi-arrow-right"></i>بازگشت به آگهی‌ها</button>
-            <div v-if="loading" class="detail-state" role="status"><i class="pi pi-spin pi-spinner"></i><span>در حال دریافت آگهی...</span></div>
-            <section v-else-if="error" class="detail-state detail-state--error" role="alert"><i class="pi pi-exclamation-circle"></i><h1>{{ error }}</h1><button type="button" @click="loadAd">تلاش دوباره</button></section>
-            <template v-else-if="ad">
-                <nav class="breadcrumb" aria-label="مسیر آگهی"><button type="button" @click="router.push({ name: 'home' })">مستروام</button><i class="pi pi-angle-left"></i><span>وام‌های بانکی</span><i class="pi pi-angle-left"></i><span>{{ ad.province || 'استان' }}</span><i class="pi pi-angle-left"></i><span>{{ ad.city || 'شهر' }}</span><i class="pi pi-angle-left"></i><strong>{{ ad.title }}</strong></nav>
-                <header class="detail-header">
-                    <div><div class="detail-kicker"><span class="type-badge" :class="ad.type">{{ ad.type === 'supply' ? 'عرضه' : 'تقاضا' }}</span><span>{{ ad.time }} در {{ ad.city }}</span></div><h1>{{ ad.title }}</h1><p>{{ ad.bank }}، {{ ad.bank_plan?.title || ad.plan }}</p></div>
-                    <div class="detail-actions"><button type="button" aria-label="اشتراک‌گذاری آگهی" title="اشتراک‌گذاری" @click="shareAd"><i class="pi pi-share-alt"></i></button><button type="button" :aria-label="saved ? 'حذف از نشان‌ها' : 'نشان کردن آگهی'" :title="saved ? 'حذف از نشان‌ها' : 'نشان کردن'" :class="{ active: saved }" @click="toggleBookmark"><i class="pi" :class="saved ? 'pi-bookmark-fill' : 'pi-bookmark'"></i></button><button type="button" aria-label="گزارش آگهی" title="گزارش آگهی" @click="reportAd"><i class="pi pi-flag"></i></button></div>
-                </header>
-                <div v-if="feedback" class="feedback" role="status">{{ feedback }}</div>
-                <div class="detail-layout">
-                    <article class="detail-main">
-                        <section class="spec-section"><h2>مشخصات آگهی</h2><dl class="spec-list"><div><dt>بانک</dt><dd>{{ ad.bank }}</dd></div><div><dt>طرح تسهیلاتی</dt><dd>{{ ad.bank_plan?.title || ad.plan || 'ثبت نشده' }}</dd></div><div><dt>نوع آگهی</dt><dd>{{ ad.type === 'supply' ? 'عرضه امتیاز وام' : 'تقاضای امتیاز وام' }}</dd></div><div><dt>مبلغ کل وام</dt><dd>{{ formatMoney(ad.amount) }}</dd></div><div><dt>قیمت واگذاری امتیاز</dt><dd>{{ formatMoney(ad.price) }}</dd></div><div><dt>کارمزد / سود بانکی</dt><dd>{{ numberFormatter.format(Number(ad.fee || ad.bank_plan?.interest_rate || 0)) }}٪</dd></div><div><dt>موقعیت</dt><dd>{{ ad.province }}، {{ ad.city }}</dd></div></dl></section>
-                        <section class="description-section"><h2>توضیحات</h2><p class="description">{{ ad.description || 'توضیحی برای این آگهی ثبت نشده است.' }}</p></section>
-                        <aside class="safety-box"><i class="pi pi-shield"></i><div><h2>راهنمای معامله امن</h2><p>پیش از انتقال رسمی امتیاز در شعبه بانک، هیچ مبلغی به‌عنوان بیعانه پرداخت نکنید. معامله را حضوری و پس از بررسی مدارک انجام دهید.</p></div></aside>
-                    </article>
-                    <aside class="contact-card"><p class="contact-label">تماس با آگهی‌دهنده</p><h2>{{ ad.type === 'demand' ? 'خریدار امتیاز وام' : 'فروشنده امتیاز وام' }}</h2><p class="contact-meta"><i class="pi pi-clock"></i>{{ ad.time }}</p><button class="contact-button" type="button" @click="showContact"><i class="pi pi-phone"></i>{{ contactVisible ? contactMobile : 'اطلاعات تماس' }}</button><button class="message-button" type="button" @click="startMessage"><i class="pi pi-comment"></i>ارسال پیام</button><small>با حفظ حریم خصوصی، اطلاعات تماس فقط برای کاربران تاییدشده نمایش داده می‌شود.</small></aside>
-                </div>
-            </template>
-        </div>
-        <AuthModal v-model:visible="authModalVisible" @authenticated="handleAuthenticated" />
-    </main>
+<main class="ad-detail-page" dir="rtl"><div class="ad-detail-shell"><button class="back-link" type="button" @click="router.push({ name: 'home' })"><i class="pi pi-arrow-right"></i>بازگشت به آگهی‌ها</button><div v-if="loading" class="detail-state" role="status"><i class="pi pi-spin pi-spinner"></i><span>در حال دریافت آگهی...</span></div><section v-else-if="error" class="detail-state detail-state--error" role="alert"><i class="pi pi-exclamation-circle"></i><h1>{{ error }}</h1><button type="button" @click="loadAd">تلاش دوباره</button></section><template v-else-if="ad">
+    <nav class="breadcrumb"><button type="button" @click="router.push({ name: 'home' })">مستروام</button><i class="pi pi-angle-left"></i><span>{{ ad.province || 'استان' }}</span><i class="pi pi-angle-left"></i><span>{{ ad.city || 'شهر' }}</span><i class="pi pi-angle-left"></i><strong>{{ ad.title }}</strong></nav>
+    <div class="detail-layout"><article class="detail-main"><header class="detail-header"><div><div class="detail-kicker"><span class="type-badge" :class="ad.type">{{ typeLabel }}</span><span><i class="pi pi-clock"></i>{{ ad.time }}</span></div><h1>{{ ad.title }}</h1><p class="bank-subtitle"><i class="pi pi-building"></i>{{ ad.bank }}، {{ ad.bank_plan?.title || ad.plan || 'طرح بانکی' }}</p><div class="detail-meta"><span><i class="pi pi-map-marker"></i>{{ ad.city }}، {{ ad.province }}</span><span><i class="pi pi-eye"></i>{{ formatNumber(ad.views_count) }} بازدید</span><span><i class="pi pi-calendar"></i>{{ ad.time }}</span></div></div><div class="detail-actions"><button type="button" title="اشتراک‌گذاری" @click="shareAd"><i class="pi pi-share-alt"></i></button><button type="button" :class="{ active: saved }" :title="saved ? 'حذف از نشان‌ها' : 'نشان کردن'" @click="toggleBookmark"><i class="pi" :class="saved ? 'pi-bookmark-fill' : 'pi-bookmark'"></i></button></div></header>
+        <section class="credit-card" :class="{ 'credit-card--brand': bankLogo }"><div class="credit-lines"></div><img v-if="bankLogo" class="credit-logo" :src="bankLogo" :alt="`لوگوی ${ad.bank}`"><span v-else class="credit-logo-fallback"><i class="pi pi-building"></i></span><span class="credit-label">MRVaM / LOAN CREDIT</span><strong class="credit-amount">{{ formatCompactMoney(ad.amount) }}</strong><div class="credit-badges"><span><i class="pi pi-check-circle"></i>امتیاز قابل انتقال</span><span>{{ ad.bank_plan?.title || ad.plan || 'طرح بانکی' }}</span><b><i class="pi pi-shield"></i>تایید هویت شده</b></div></section><section class="safety-box safety-box--main"><header><i class="pi pi-shield"></i><div><h2>نکات مهم برای معامله امن</h2><p>لطفاً پیش از واریز هرگونه وجه به موارد زیر توجه فرمایید:</p></div></header><ul><li><i class="pi pi-check-circle"></i><span><strong>انتقال قطعی در سامانه رسمی یا شعبه:</strong> انتقال امتیاز وام را فقط از سامانه‌های مجاز بانکی یا شعبه رسمی نهایی کنید.</span></li><li><i class="pi pi-check-circle"></i><span><strong>عدم پرداخت بیعانه:</strong> پیش از رویت مستندات و تایید صلاحیت انتقال، بیعانه یا کمیسیون پرداخت نکنید.</span></li><li><i class="pi pi-check-circle"></i><span><strong>بررسی سقف اعتبار و اعتبارسنجی:</strong> رتبه اعتبارسنجی مرآت، سمات و شرایط ضامنین بانک عامل را استعلام بگیرید.</span></li><li><i class="pi pi-check-circle"></i><span><strong>تطابق هویت صاحب حساب:</strong> نام صاحب حساب مقصد باید دقیقاً با صاحب امتیاز وام در بانک مطابقت داشته باشد.</span></li></ul><button type="button" class="report-link" @click="reportAd"><i class="pi pi-flag"></i>مشاهده مورد مشکوک؟ ثبت گزارش تخلف آگهی</button></section>
+        <section class="spec-section"><h2>مشخصات کلیدی</h2><div class="spec-grid"><div><i class="pi pi-wallet"></i><span>مبلغ کل وام</span><strong>{{ formatMillionMoney(ad.amount) }}</strong></div><div><i class="pi pi-money-bill"></i><span>قیمت واگذاری</span><strong>{{ formatMillionMoney(ad.price) }}</strong></div><div><i class="pi pi-percentage"></i><span>کارمزد / سود بانکی</span><strong>{{ formatNumber(ad.fee || ad.bank_plan?.interest_rate) }}٪</strong></div><div><i class="pi pi-calendar-clock"></i><span>دوره بازپرداخت</span><strong>{{ ad.installment_count ? `${formatNumber(ad.installment_count)} ماهه` : 'ثبت نشده' }}</strong></div></div></section>
+        <section class="description-section description"><h2>توضیحات آگهی‌دهنده</h2><p>{{ ad.description || 'توضیحی برای این آگهی ثبت نشده است.' }}</p></section><section class="safety-box safety-box--main"><i class="pi pi-shield"></i><div><h2>راهنمای معامله امن</h2><ul><li>انتقال امتیاز را فقط در شعبه بانک انجام دهید.</li><li>پیش از بررسی مدارک، بیعانه پرداخت نکنید.</li><li>قرارداد و رسید رسمی معامله را نگه دارید.</li></ul></div></section>
+    </article><aside class="detail-sidebar"><section class="contact-card"><span class="contact-label">تماس با آگهی‌دهنده</span><h2>{{ ad.type === 'demand' ? 'خریدار امتیاز وام' : 'فروشنده امتیاز وام' }}</h2><div class="seller-row"><span class="seller-avatar"><i class="pi pi-user"></i></span><div><strong>{{ ad.advertiser_mobile ? 'کاربر احراز شده' : 'آگهی‌دهنده مستروام' }}</strong><small><i class="pi pi-verified"></i> احراز هویت شده</small></div></div><button class="contact-button" type="button" @click="showContact"><i class="pi pi-phone"></i>{{ contactVisible ? contactMobile : 'دریافت اطلاعات تماس و گفتگو' }}</button><div class="secondary-actions"><button type="button" @click="toggleBookmark"><i class="pi" :class="saved ? 'pi-bookmark-fill' : 'pi-bookmark'"></i>{{ saved ? 'نشان شد' : 'نشان کردن' }}</button><button type="button" @click="shareAd"><i class="pi pi-share-alt"></i>اشتراک‌گذاری</button></div><small class="privacy-note">اطلاعات تماس فقط برای کاربران تاییدشده نمایش داده می‌شود.</small></section><section class="location-card"><h2><i class="pi pi-map-marker"></i>محدوده آگهی</h2><div class="mini-map"><span></span><span></span><i class="pi pi-map-marker"></i></div><strong>{{ ad.city }}</strong><small>{{ ad.province }}</small></section><section class="safety-box"><i class="pi pi-shield"></i><div><h2>راهنمای معامله امن</h2><ul><li>انتقال امتیاز را فقط در شعبه بانک انجام دهید.</li><li>پیش از بررسی مدارک، بیعانه پرداخت نکنید.</li><li>قرارداد و رسید رسمی معامله را نگه دارید.</li></ul></div></section></aside></div>
+    <section v-if="feedback" class="feedback" role="status">{{ feedback }}</section><section v-if="relatedAds.length" class="related-section"><div class="related-heading"><h2>آگهی‌های مشابه</h2><span>پیشنهادهای مرتبط با این بانک</span></div><div class="related-grid"><AdCard v-for="item in relatedAds" :key="item.id" :ad="item" @view="(next) => router.push({ name: 'advertisement.detail', params: { id: next.id } })" /></div></section>
+    </template></div><AuthModal v-model:visible="authModalVisible" @authenticated="handleAuthenticated" /></main>
 </template>
 
 <style scoped>
-.ad-detail-page { min-height: 100vh; background: #f7f8f9; color: #202a35; }.ad-detail-shell { width: min(1080px, calc(100% - 32px)); margin: auto; padding: 28px 0 64px; }.back-link, .breadcrumb button { border: 0; background: transparent; color: #a62626; cursor: pointer; font: inherit; }.back-link { display: inline-flex; gap: 8px; margin-bottom: 25px; font-size: 12px; }.breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; color: #7a8791; font-size: 11px; }.breadcrumb strong { overflow: hidden; max-width: 280px; color: #202a35; text-overflow: ellipsis; white-space: nowrap; }.breadcrumb .pi { font-size: 9px; }.detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 26px; border-bottom: 1px solid #e4e7e9; }.detail-kicker { display: flex; align-items: center; gap: 12px; color: #7a8791; font-size: 12px; }.type-badge { padding: 5px 10px; border-radius: 16px; background: #edf8f5; color: #287d6f; font-size: 11px; }.type-badge.demand { background: #fff4e8; color: #a86426; }.detail-header h1 { margin: 15px 0 7px; font-size: clamp(22px, 3vw, 32px); line-height: 1.6; }.detail-header p { margin: 0; color: #7a8791; font-size: 13px; }.detail-actions { display: flex; gap: 8px; }.detail-actions button { width: 38px; height: 38px; border: 1px solid #dfe4e8; border-radius: 8px; background: #fff; color: #63717b; cursor: pointer; }.detail-actions button:hover, .detail-actions button.active { border-color: #e3b3ad; background: #fff5f2; color: #a62626; }.feedback { margin-top: 16px; padding: 10px 14px; border-right: 3px solid #a62626; background: #fff5f2; color: #7e2929; font-size: 12px; }.detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; margin-top: 28px; }.detail-main { min-width: 0; }.spec-section, .description-section { padding: 0 0 30px; }.detail-main h2 { margin: 0 0 18px; font-size: 17px; }.spec-list { margin: 0; }.spec-list div { display: flex; justify-content: space-between; gap: 24px; padding: 14px 0; border-bottom: 1px dashed #dfe4e8; }.spec-list dt { color: #7a8791; font-size: 13px; }.spec-list dd { margin: 0; color: #202a35; font-size: 13px; font-weight: 700; }.description { margin: 0; color: #4d5b65; font-size: 14px; line-height: 2.3; white-space: pre-line; }.safety-box { display: flex; gap: 14px; padding: 18px; border: 1px solid #eadfc5; border-radius: 8px; background: #fffaf0; color: #66542b; }.safety-box > .pi { color: #b9872d; font-size: 22px; }.safety-box h2 { margin-bottom: 7px; color: #5d4b25; font-size: 14px; }.safety-box p { margin: 0; font-size: 12px; line-height: 2; }.contact-card { align-self: start; padding: 22px; border: 1px solid #e4e7e9; border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(32,42,53,.06); }.contact-label, .contact-meta, .contact-card small { color: #7a8791; font-size: 11px; }.contact-card h2 { margin: 8px 0; font-size: 16px; }.contact-meta { display: flex; gap: 6px; margin: 0 0 20px; }.contact-button, .message-button { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 12px; }.contact-button { border: 0; background: #a62626; color: #fff; }.message-button { margin-top: 9px; border: 1px solid #d9dfe3; background: #fff; color: #42515b; }.contact-card small { display: block; margin-top: 16px; line-height: 1.9; }.detail-state { display: grid; place-items: center; gap: 12px; min-height: 420px; color: #7a8791; font-size: 14px; }.detail-state--error h1 { margin: 0; color: #202a35; font-size: 18px; }.detail-state--error button { padding: 9px 16px; border: 0; border-radius: 6px; background: #a62626; color: #fff; cursor: pointer; }
-@media (max-width: 720px) { .ad-detail-shell { width: min(100% - 24px, 560px); padding-top: 18px; }.detail-header { flex-direction: column; }.detail-actions { order: -1; align-self: flex-start; }.detail-layout { grid-template-columns: 1fr; }.contact-card { order: -1; }.breadcrumb strong { max-width: 180px; }.spec-list div { align-items: flex-start; }.spec-list dd { text-align: left; } }
+.ad-detail-page{min-height:100vh;background:#f7f8fa;color:#1f2937}.ad-detail-shell{width:min(1240px,calc(100% - 32px));margin:0 auto;padding:28px 0 72px}.back-link,.breadcrumb button{border:0;background:transparent;color:#a62626;cursor:pointer;font:inherit}.back-link{display:inline-flex;gap:8px;margin-bottom:24px;font-size:12px}.breadcrumb{display:flex;align-items:center;gap:8px;margin-bottom:22px;color:#89949c;font-size:11px}.breadcrumb strong{overflow:hidden;color:#374151;text-overflow:ellipsis;white-space:nowrap}.breadcrumb .pi{font-size:9px}.detail-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:28px;align-items:start}.detail-main,.detail-sidebar{min-width:0}.detail-sidebar{position:sticky;top:24px;display:grid;gap:16px}.detail-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:0 0 22px;border-bottom:1px solid #e5e7eb}.detail-kicker,.detail-meta{display:flex;align-items:center;flex-wrap:wrap;gap:12px;color:#7b8790;font-size:11px}.detail-kicker .pi,.detail-meta .pi{color:#a62626}.type-badge{display:inline-flex;padding:7px 12px;border-radius:999px;background:#eaf8f0;color:#287b50;font-size:11px;font-weight:700}.type-badge.demand{background:#edf4ff;color:#4265a0}.detail-header h1{margin:12px 0 8px;color:#111827;font-size:clamp(20px,3vw,29px);font-weight:900;line-height:1.55}.bank-subtitle{margin:0;color:#66747c;font-size:12px}.bank-subtitle .pi{margin-left:5px;color:#a62626}.detail-meta{margin-top:18px}.detail-actions{display:flex;gap:8px}.detail-actions button{display:grid;place-items:center;width:38px;height:38px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#66747c;cursor:pointer}.detail-actions button:hover,.detail-actions button.active{border-color:#e5b2ad;background:#fff5f2;color:#a62626}.credit-card{position:relative;isolation:isolate;overflow:hidden;min-height:230px;margin:26px 0;padding:24px;border-radius:24px;background:linear-gradient(125deg,#0f172a,#374151 52%,#111827);box-shadow:0 18px 35px rgba(15,23,42,.2);color:#fff}.credit-card--brand{background:linear-gradient(125deg,#111827,#334155 55%,#7f1d1d)}.credit-lines{position:absolute;inset:0;z-index:-1;opacity:.15;background:linear-gradient(120deg,transparent 20%,#fff 21%,transparent 22%,transparent 62%,#fff 63%,transparent 64%),linear-gradient(35deg,transparent 48%,#fff 49%,transparent 50%)}.credit-logo{position:absolute;top:24px;left:24px;width:54px;height:54px;object-fit:contain;border-radius:12px;background:#fff;padding:7px}.credit-logo-fallback{position:absolute;top:24px;left:24px;display:grid;place-items:center;width:54px;height:54px;border-radius:12px;background:rgba(255,255,255,.16);font-size:23px}.credit-label{display:block;color:#cbd5e1;font-size:10px;letter-spacing:2px;direction:ltr}.credit-amount{display:block;margin-top:36px;font-size:30px;letter-spacing:.4px}.credit-badges{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:28px}.credit-badges span,.credit-badges b{padding:6px 9px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:rgba(255,255,255,.1);color:#f8fafc;font-size:10px;font-weight:500}.credit-badges b{background:rgba(16,185,129,.2);color:#d1fae5}.credit-badges i{margin-left:3px}.spec-section,.description-section{padding:4px 0 28px}.spec-section h2,.description-section h2,.related-heading h2{margin:0 0 16px;color:#1f2937;font-size:18px;font-weight:800}.spec-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.spec-grid>div{display:flex;min-height:126px;flex-direction:column;justify-content:space-between;padding:16px;border:1px solid #f0f1f3;border-radius:16px;background:#f9fafb}.spec-grid i{color:#a62626;font-size:18px}.spec-grid span{margin-top:12px;color:#6b7280;font-size:11px}.spec-grid strong{color:#1f2937;font-size:13px}.description-section{border-top:1px solid #e5e7eb}.description-section p{margin:0;color:#4b5563;font-size:13px;line-height:2.2;white-space:pre-line}.contact-card,.location-card,.safety-box{padding:20px;border:1px solid #edf0f2;border-radius:20px;background:#fff;box-shadow:0 8px 22px rgba(32,42,53,.06)}.contact-label{color:#a62626;font-size:11px;font-weight:700}.contact-card h2{margin:8px 0 16px;color:#1f2937;font-size:18px}.seller-row{display:flex;align-items:center;gap:10px;margin-bottom:16px}.seller-avatar{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;background:#fff1ee;color:#a62626}.seller-row strong,.seller-row small{display:block}.seller-row strong{color:#374151;font-size:12px}.seller-row small{margin-top:4px;color:#287b50;font-size:10px}.contact-button{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px;border:0;border-radius:12px;background:#a62626;color:#fff;cursor:pointer;font:inherit;font-size:12px;font-weight:800;box-shadow:0 10px 18px rgba(127,29,29,.15)}.contact-button:hover{background:#861f1f}.secondary-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.secondary-actions button{padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#66747c;cursor:pointer;font:inherit;font-size:11px}.secondary-actions button:hover{border-color:#e5b2ad;color:#a62626}.privacy-note{display:block;margin-top:14px;color:#9aa3aa;font-size:10px;line-height:1.8}.location-card h2{display:flex;align-items:center;gap:7px;margin:0 0 12px;font-size:14px}.location-card h2 .pi{color:#a62626}.mini-map{position:relative;overflow:hidden;height:130px;margin-bottom:12px;border-radius:14px;background:#e8f0ed;background-image:linear-gradient(35deg,transparent 48%,#fff 49%,#fff 51%,transparent 52%),linear-gradient(120deg,transparent 48%,#d0dfd9 49%,#d0dfd9 51%,transparent 52%);background-size:100% 100%,55px 55px}.mini-map span{position:absolute;width:130%;height:7px;border-radius:8px;background:#fff;transform:rotate(-20deg)}.mini-map span:first-child{top:30%;left:-10%}.mini-map span:nth-child(2){top:68%;left:-15%;transform:rotate(18deg)}.mini-map .pi{position:absolute;top:43%;left:48%;color:#a62626;font-size:26px}.location-card>strong,.location-card>small{display:block}.location-card>strong{color:#374151;font-size:13px}.location-card>small{margin-top:4px;color:#89949c;font-size:11px}.safety-box{display:flex;gap:12px;background:#fff8f5;border-color:#f4ddd7}.safety-box>i{color:#a62626;font-size:22px}.safety-box h2{margin:0 0 8px;font-size:14px}.safety-box ul{display:grid;gap:7px;margin:0;padding:0 16px 0 0;color:#68747c;font-size:11px;line-height:1.8}.feedback{margin-top:18px;padding:11px 14px;border-right:3px solid #a62626;background:#fff5f2;color:#7e2929;font-size:12px}.related-section{margin-top:48px;padding-top:30px;border-top:1px solid #e5e7eb}.related-heading{display:flex;align-items:end;justify-content:space-between;margin-bottom:18px}.related-heading span{color:#89949c;font-size:11px}.related-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}.detail-state{display:grid;place-items:center;min-height:400px;gap:12px;color:#7b8790;font-size:13px}.detail-state i{font-size:28px}.detail-state--error h1{font-size:18px}.detail-state--error button{padding:10px 16px;border:0;border-radius:9px;background:#a62626;color:#fff;cursor:pointer;font:inherit;font-size:12px}@media(max-width:900px){.detail-layout{grid-template-columns:minmax(0,1fr) 290px}.spec-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.related-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.ad-detail-shell{width:min(100% - 24px,600px);padding-top:18px}.detail-layout{display:block}.detail-sidebar{position:static;margin-top:22px}.detail-header{flex-direction:column}.detail-actions{order:-1;align-self:flex-start}.credit-card{min-height:210px}.credit-amount{font-size:25px}.spec-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.related-grid{grid-template-columns:1fr}.related-heading{align-items:flex-start;flex-direction:column;gap:5px}}
+.safety-box--main{display:block;padding:16px;border:1px solid rgba(252,211,77,.8);border-radius:16px;background:rgba(255,251,235,.72);box-shadow:0 1px 3px rgba(120,53,15,.06)}.safety-box--main>header{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}.safety-box--main>header>i{color:#d97706;font-size:18px}.safety-box--main h2{margin:0 0 4px;color:#78350f;font-size:14px}.safety-box--main header p{margin:0;color:#92400e;font-size:11px;line-height:1.8}.safety-box--main ul{display:grid;gap:10px;margin:0;padding:0;list-style:none}.safety-box--main li{display:flex;align-items:flex-start;gap:8px;color:#57534e;font-size:11px;line-height:1.9}.safety-box--main li>i{flex:0 0 auto;margin-top:4px;color:#d97706;font-size:12px}.safety-box--main li strong{color:#44403c}.report-link{display:inline-flex;align-items:center;gap:6px;margin-top:14px;padding:0;border:0;background:transparent;color:#a16207;cursor:pointer;font:inherit;font-size:10px}.report-link:hover{color:#92400e;text-decoration:underline}
 </style>

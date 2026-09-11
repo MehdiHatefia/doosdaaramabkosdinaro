@@ -174,30 +174,24 @@ describe('HomeView', () => {
         expect(getAllAds).toHaveBeenLastCalledWith(expect.not.objectContaining({ location_id: expect.anything(), location_ids: expect.anything() }));
     });
 
-    it('opens listing details from the card CTA and returns to listings', async () => {
+    it('navigates listing details through the canonical detail route', async () => {
         const wrapper = mountHome();
         await flushPromises();
 
         await wrapper.find('.card-cta').trigger('click');
+        await flushPromises();
 
-        expect(wrapper.find('.detail-page').exists()).toBe(true);
-        expect(wrapper.find('.detail-card h1').text()).toContain('امتیاز وام');
-
-        await wrapper.find('.back-button').trigger('click');
-        expect(wrapper.find('.detail-page').exists()).toBe(false);
-        expect(wrapper.findAll('.ad-card')).toHaveLength(6);
+        expect(window.location.pathname).toBe('/advertisements/1');
     });
 
-    it('shows media, description, location, and related ads in details', async () => {
+    it('leaves detail rendering to the canonical detail route', async () => {
         const wrapper = mountHome();
         await flushPromises();
 
         await wrapper.find('.card-cta').trigger('click');
+        await flushPromises();
 
-        expect(wrapper.find('.detail-media').exists()).toBe(true);
-        expect(wrapper.find('.detail-description').text()).toContain('توضیحات آگهی');
-        expect(wrapper.find('.location-map').exists()).toBe(true);
-        expect(wrapper.findAll('.related-grid .ad-card')).toHaveLength(3);
+        expect(window.location.pathname).toBe('/advertisements/1');
     });
 
     it('reloads advertisements with the selected sort option and syncs the URL', async () => {

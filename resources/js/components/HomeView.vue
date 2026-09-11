@@ -85,7 +85,11 @@ const filters = computed(() => ({
 
 function syncAdFromHash() {
     const match = window.location.hash.match(/^#ad-(\d+)$/);
-    selectedAd.value = match ? ads.value.find((ad) => ad.id === Number(match[1])) || null : null;
+    if (match) {
+        router.replace({ name: 'advertisement.detail', params: { id: match[1] } });
+        return;
+    }
+    selectedAd.value = null;
 }
 
 async function loadAds() {
@@ -271,13 +275,11 @@ async function onPageChange(event) {
 }
 
 function openAd(ad) {
-    selectedAd.value = ad;
-    window.history.pushState({}, '', `#ad-${ad.id}`);
+    router.push({ name: 'advertisement.detail', params: { id: ad.id } });
 }
 
 function closeAd() {
-    selectedAd.value = null;
-    window.history.pushState({}, '', '#listings');
+    router.push({ name: 'home' });
 }
 
 function contactAdvertiser() {
