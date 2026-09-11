@@ -1,0 +1,8 @@
+<script setup>
+import { ref } from 'vue';
+import { createLogger } from '../utils/logger';
+const logger = createLogger('UserDashboard'); const notifications = ref(true); const compact = ref(false);
+function save() { logger.info('ActionName', 'Account settings saved', { notifications: notifications.value, compact: compact.value }); }
+</script>
+<template><section class="module-view"><header class="module-header"><span class="module-kicker">تنظیمات</span><h1>تنظیمات حساب کاربری</h1><p>تنظیمات تجربه کاربری خود را مدیریت کنید.</p></header><div class="settings-card"><label><span><strong>اعلان‌های آگهی</strong><small>از وضعیت آگهی‌های خود باخبر شوید.</small></span><input v-model="notifications" type="checkbox" /></label><label><span><strong>نمایش فشرده</strong><small>اطلاعات بیشتری را در صفحه نمایش دهید.</small></span><input v-model="compact" type="checkbox" /></label><button class="primary-action" type="button" @click="save"><i class="pi pi-save"></i>ذخیره تنظیمات</button></div></section></template>
+<style scoped>.module-view{direction:rtl}.module-header h1{margin:7px 0 5px;color:#202a35;font-size:24px}.module-header p{margin:0 0 25px;color:#78848c;font-size:12px}.module-kicker{color:#a62626;font-size:11px;font-weight:700}.settings-card{display:grid;gap:0;padding:8px 22px 22px;border:1px solid #edf0f2;border-radius:10px;background:#fff}.settings-card label{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:17px 0;border-bottom:1px solid #f0f2f3;color:#36434c}.settings-card label span{display:grid;gap:4px}.settings-card small{color:#89949b;font-size:11px}.settings-card input{accent-color:#a62626;width:18px;height:18px}.settings-card .primary-action{margin-top:18px;justify-self:start}</style>

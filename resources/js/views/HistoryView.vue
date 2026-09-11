@@ -1,0 +1,10 @@
+<script setup>
+import { computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { createLogger } from '../utils/logger';
+const logger = createLogger('UserDashboard'); const router = useRouter();
+const history = computed(() => { try { return JSON.parse(localStorage.getItem('recent_ads') || '[]'); } catch { return []; } });
+function open(ad) { logger.info('ActionName', 'Recent advertisement opened', { advertisementId: ad.id }); router.push({ name: 'advertisement.detail', params: { id: ad.id } }); }
+</script>
+<template><section class="module-view"><header class="module-header"><span class="module-kicker">فعالیت حساب</span><h1>بازدیدهای اخیر</h1><p>آخرین آگهی‌هایی که مشاهده کرده‌اید.</p></header><div v-if="!history.length" class="module-empty"><i class="pi pi-history"></i><h2>بازدید اخیری ثبت نشده است</h2></div><div v-else class="history-list"><button v-for="ad in history" :key="ad.id" type="button" class="history-item" @click="open(ad)"><i class="pi pi-history"></i><span><strong>{{ ad.title }}</strong><small>{{ ad.bank }}، {{ ad.city }}</small></span><i class="pi pi-angle-left"></i></button></div></section></template>
+<style scoped>.module-view{direction:rtl}.module-header h1{margin:7px 0 5px;color:#202a35;font-size:24px}.module-header p{margin:0;color:#78848c;font-size:12px}.module-kicker{color:#a62626;font-size:11px;font-weight:700}.module-empty{display:grid;place-items:center;gap:8px;min-height:260px;border:1px dashed #dfe4e7;border-radius:10px;background:#fff;color:#7b8790}.module-empty h2{font-size:16px}.history-list{display:grid;gap:8px}.history-item{display:flex;align-items:center;gap:14px;width:100%;padding:16px;border:1px solid #edf0f2;border-radius:9px;background:#fff;color:#56636d;text-align:right;cursor:pointer}.history-item>i:first-child{font-size:19px}.history-item span{display:grid;flex:1;gap:4px}.history-item strong{color:#202a35;font-size:13px}.history-item small{font-size:11px;color:#879199}.history-item>i:last-child{font-size:11px;color:#a6afb5}</style>

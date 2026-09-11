@@ -1,0 +1,46 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Bank;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+
+class BankController extends Controller
+{
+    public function index(Request $request)
+    {
+        $startedAt = microtime(true);
+        $banks = Bank::query()->where('is_active', true)->orderBy('name')->get();
+
+        Log::info('Active banks listed', [
+            'function' => __METHOD__,
+            'user_id' => $request->user()?->id,
+            'payload' => [],
+            'trace' => null,
+            'result_count' => $banks->count(),
+            'duration_ms' => round((microtime(true) - $startedAt) * 1000, 2),
+        ]);
+
+        return response()->json(['data' => $banks]);
+    }
+
+    public function plans(Request $request, int $id): JsonResponse
+    {
+        $startedAt = microtime(true);
+        $bank = Bank::query()->where('is_active', true)->findOrFail($id);
+        $plans = $bank->plans()->where('is_active', true)->orderBy('title')->get();
+
+        Log::info('Active bank plans listed', [
+            'function' => __METHOD__,
+            'user_id' => $request->user()?->id,
+            'payload' => ['bank_id' => $id],
+            'trace' => null,
+            'result_count' => $plans->count(),
+            'duration_ms' => round((microtime(true) - $startedAt) * 1000, 2),
+        ]);
+
+        return response()->json(['data' => $plans]);
+    }
+}
