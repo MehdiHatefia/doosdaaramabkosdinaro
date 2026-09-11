@@ -8,6 +8,9 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Auth\Events\Registered;
+use Illuminate\Support\Facades\DB;
 use Spatie\Permission\Models\Role;
 
 class AuthController extends Controller
@@ -60,21 +63,24 @@ class AuthController extends Controller
         Log::info('OTP verification started', $context);
 
         try {
-            $user = User::where('mobile', $validated['mobile'])->first();
-            if (! $user) {
-                $otp = $otpService->validate($request, $validated['mobile'], $validated['code']);
-                $context['otp_id'] = $otp->id;
-                Log::info('Registration details required', $context);
-
-                return response()->json([
-                    'registration_required' => true,
-                    'mobile' => $validated['mobile'],
-                ]);
-            }
-
-            $otp = $otpService->consume($request, $validated['mobile'], $validated['code']);
+            [$user, $isNewUser, $otp] = DB::transaction(function () use ($request, $otpService, $validated) {
+                $otp = $otpService->consume($request, $validated['mobile'], $validated['code']);
+                $user = User::firstOrCreate(
+                    ['mobile' => $validated['mobile']],
+                    ['is_verified' => false, 'role' => 'user']
+                );
+                return [$user, $user->wasRecentlyCreated, $otp];
+            });
             $context['otp_id'] = $otp->id;
-            Log::info('Existing user login continued', $context + ['user_id' => $user->id]);
+            if ($isNewUser) {
+                Event::dispatch(new Registered($user));
+                Role::findOrCreate('buyer', 'web');
+                Role::findOrCreate('seller', 'web');
+                $user->syncRoles(['buyer', 'seller']);
+                Log::info('New user registered through OTP', $context + ['user_id' => $user->id]);
+            } else {
+                Log::info('Existing user login continued', $context + ['user_id' => $user->id]);
+            }
         } catch (ModelNotFoundException $exception) {
             Log::warning('OTP verification rejected', $context);
             return response()->json(['message' => 'کد تایید نادرست یا منقضی شده است.'], 422);
@@ -96,6 +102,7 @@ class AuthController extends Controller
         return response()->json([
             'token' => $token,
             'user' => $user,
+            'is_new_user' => $isNewUser,
         ]);
     }
 

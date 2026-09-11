@@ -40,17 +40,12 @@ class RbacTest extends TestCase
     {
         Otp::create(['mobile' => '09123456789', 'code' => '12345', 'expires_at' => now()->addMinutes(2)]);
 
-        $this->postJson('/api/auth/verify-otp', [
+        $response = $this->postJson('/api/auth/verify-otp', [
             'mobile' => '09123456789', 'code' => '12345',
-        ])->assertJson(['registration_required' => true]);
-        $response = $this->postJson('/api/auth/complete-registration', [
-            'mobile' => '09123456789',
-            'code' => '12345',
-            'name' => 'کاربر نقش‌دار',
-        ]);
+        ])->assertJson(['is_new_user' => true]);
         $user = User::where('mobile', '09123456789')->firstOrFail();
 
-        $response->assertCreated()->assertJsonPath('user.roles.0.name', 'buyer');
+        $response->assertOk()->assertJsonPath('user.roles.0.name', 'buyer');
         $this->assertTrue($user->hasRole('buyer'));
         $this->assertTrue($user->hasRole('seller'));
     }

@@ -36,7 +36,7 @@ class AuthOtpTest extends TestCase
         $this->assertDatabaseHas('otps', ['mobile' => '09123456789']);
     }
 
-    public function test_sending_again_within_two_minutes_is_rate_limited(): void
+    public function test_sending_again_within_one_minute_is_rate_limited(): void
     {
         $this->postJson('/api/auth/send-otp', ['mobile' => '09123456789'])->assertOk();
 
@@ -44,47 +44,33 @@ class AuthOtpTest extends TestCase
             ->assertStatus(429);
     }
 
-    public function test_new_user_completes_registration_and_returns_a_token(): void
+    public function test_new_user_verification_registers_user_and_returns_token(): void
     {
         $this->postJson('/api/auth/send-otp', ['mobile' => '09123456789']);
         $code = Otp::where('mobile', '09123456789')->latest()->value('code');
 
-        $this->postJson('/api/auth/verify-otp', [
+        $response = $this->postJson('/api/auth/verify-otp', [
             'mobile' => '09123456789',
             'code' => $code,
-        ])->assertJson(['registration_required' => true]);
-
-        $response = $this->postJson('/api/auth/complete-registration', [
-            'mobile' => '09123456789',
-            'code' => $code,
-            'name' => 'کاربر جدید',
         ]);
 
-        $response->assertCreated()->assertJsonStructure(['token', 'user' => ['id', 'mobile', 'role']]);
+        $response->assertOk()
+            ->assertJsonStructure(['token', 'user' => ['id', 'mobile', 'is_verified'], 'is_new_user'])
+            ->assertJsonPath('is_new_user', true);
+        $this->withToken($response->json('token'))->getJson('/api/user/profile')->assertOk();
         $this->assertDatabaseHas('users', ['mobile' => '09123456789', 'role' => 'user']);
         $this->assertNotNull(Otp::where('mobile', '09123456789')->latest()->value('consumed_at'));
     }
 
-    public function test_new_user_must_complete_registration_before_login(): void
+    public function test_new_user_can_continue_to_profile_after_otp_login(): void
     {
         $this->postJson('/api/auth/send-otp', ['mobile' => '09111111111']);
         $code = Otp::where('mobile', '09111111111')->latest()->value('code');
 
-        $this->postJson('/api/auth/verify-otp', ['mobile' => '09111111111', 'code' => $code])
-            ->assertOk()
-            ->assertJson(['registration_required' => true, 'mobile' => '09111111111'])
-            ->assertJsonMissingPath('token');
-        $this->assertDatabaseMissing('users', ['mobile' => '09111111111']);
+        $response = $this->postJson('/api/auth/verify-otp', ['mobile' => '09111111111', 'code' => $code]);
 
-        $response = $this->postJson('/api/auth/complete-registration', [
-            'mobile' => '09111111111',
-            'code' => $code,
-            'name' => 'کاربر آزمایشی',
-            'email' => 'new-user@example.com',
-        ]);
-
-        $response->assertCreated()->assertJsonStructure(['token', 'user' => ['id', 'mobile', 'name', 'email']]);
-        $this->assertDatabaseHas('users', ['mobile' => '09111111111', 'name' => 'کاربر آزمایشی']);
+        $response->assertOk()->assertJsonPath('is_new_user', true)->assertJsonPath('user.mobile', '09111111111');
+        $this->assertDatabaseHas('users', ['mobile' => '09111111111', 'is_verified' => false]);
     }
 
     public function test_existing_user_can_log_in_again(): void

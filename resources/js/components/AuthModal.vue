@@ -2,8 +2,10 @@
 import { computed, ref, watch } from 'vue';
 import { createLogger, logException } from '../utils/logger';
 import { authService } from '../services';
+import { useAuthStore } from '../stores/useAuthStore';
 
 const logger = createLogger('AuthModal');
+const authStore = useAuthStore();
 
 const visible = defineModel('visible', { type: Boolean, default: false });
 const emit = defineEmits(['authenticated']);
@@ -72,13 +74,9 @@ async function verifyOtp() {
     try {
         const data = await authService.verifyOtp({ mobile: normalizedMobile.value, code: normalizeDigits(code.value) });
         logger.info('verifyOtp', 'OTP verification succeeded');
-        if (data.registration_required) {
-            registrationRequired.value = true;
-            step.value = 3;
-            return;
-        }
+        authStore.setSession(data.token, data.user);
         logger.info('verifyOtp', 'Authenticated state stored', { userId: data.user?.id });
-        emit('authenticated', data.user);
+        emit('authenticated', { user: data.user, is_new_user: data.is_new_user === true });
         visible.value = false;
     } catch (exception) {
         logger.error('verifyOtp', 'OTP verification failed', logException(exception));
@@ -103,6 +101,7 @@ async function completeRegistration() {
             email: email.value.trim() || null,
         });
         logger.info('completeRegistration', 'Registration and login succeeded', { userId: data.user?.id });
+        authStore.setSession(data.token, data.user);
         emit('authenticated', data.user);
         visible.value = false;
     } catch (exception) {

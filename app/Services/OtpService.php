@@ -17,10 +17,13 @@ class OtpService
         $context = $this->context($request, $mobile);
         Log::info('OTP database issuance started', $context);
 
-        $recentCount = Otp::where('mobile', $mobile)->where('created_at', '>=', $now->copy()->subMinutes(2))->count();
+        $recentCount = Otp::where('mobile', $mobile)
+            ->where('ip_address', $request->ip())
+            ->where('created_at', '>=', $now->copy()->subMinute())
+            ->count();
         if ($recentCount > 0) {
             Log::warning('OTP database rate limit rejected', $context + ['recent_count' => $recentCount]);
-            throw new TooManyRequestsHttpException(null, 'لطفاً دو دقیقه بعد دوباره تلاش کنید.');
+            throw new TooManyRequestsHttpException(null, 'لطفاً یک دقیقه بعد دوباره تلاش کنید.');
         }
 
         return DB::transaction(function () use ($request, $mobile, $now, $context) {

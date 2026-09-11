@@ -100,10 +100,10 @@ flowchart LR
     Complete --> Token
     Client -->|POST /api/auth/logout| Logout[AuthController.logout]
     Logout -->|revoke current token| Token
-    Send -.->|1 request / 2 minutes per IP + mobile| Limiter[OTP RateLimiter]
+    Send -.->|1 request / 1 minute per IP + mobile| Limiter[OTP RateLimiter]
 ```
 
-The passwordless flow normalizes Persian and Arabic digits before validating Iranian mobile numbers with `^09[0-9]{9}$`, stores a random five-digit OTP in MySQL for 120 seconds, and branches after OTP validation: existing users receive a Sanctum personal access token immediately, while new users must submit name and optional email through `POST /api/auth/complete-registration` before their account and token are created. For local and testing environments only, the generated OTP is included in the structured creation log to support manual testing; production logs never contain the raw OTP.
+The passwordless flow normalizes Persian and Arabic digits before validating Iranian mobile numbers with `^09[0-9]{9}$`, stores a random five-digit OTP in MySQL for 120 seconds, and limits each mobile/IP pair to one send per minute. `POST /api/auth/verify-otp` consumes the OTP atomically, creates a missing user with `is_verified=false`, assigns default roles, issues a Sanctum token, and returns `is_new_user` so the frontend can route first-time users toward profile/KYC completion while existing users continue normally. For local and testing environments only, the generated OTP is included in the structured creation log to support manual testing; production logs never contain the raw OTP.
 
 ## Marketplace API
 
@@ -168,15 +168,14 @@ flowchart TD
 flowchart LR
     Client[Vue AuthModal] --> Send[AuthController.sendOtp]
     Send --> Service[OtpService.issue]
-    Service --> Rate[DB count: otps.created_at in last 2 minutes]
+    Service --> Rate[DB count: otps.created_at in last minute by mobile/IP]
     Service --> Invalidate[Consume previous valid OTPs]
     Service --> Otp[(otps)]
     Client --> Verify[AuthController.verifyOtp]
-    Verify --> Check[OtpService.validate for new users]
-    Verify --> Consume[OtpService.consume for existing users]
-    Complete --> ConsumeRegistration[OtpService.consume for registration]
+    Verify --> Consume[OtpService.consume for all users]
+    Consume --> FirstOrCreate[User::firstOrCreate + is_new_user]
     Consume --> Lock[DB lockForUpdate]
-    ConsumeRegistration --> Lock
+    FirstOrCreate --> Token
     Lock --> Otp
     Otp -->|consumed_at set| Token[Sanctum token]
 ```

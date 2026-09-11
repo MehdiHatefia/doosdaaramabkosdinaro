@@ -31,6 +31,13 @@ export const useAuthStore = defineStore('auth', {
                 verified: Boolean(this.user?.is_verified === true || this.user?.verified === true),
             });
         },
+        setSession(token, user) {
+            if (token) localStorage.setItem('auth_token', token);
+            if (user) localStorage.setItem('auth_user', JSON.stringify(user));
+            this.token = token || null;
+            this.user = user || null;
+            logger.info('setSession', 'Authentication session stored', { userId: user?.id, isNewUser: user?.is_new_user });
+        },
         async refreshUser() {
             try {
                 const response = await authService.getProfile();
